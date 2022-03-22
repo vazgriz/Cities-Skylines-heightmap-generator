@@ -19,8 +19,12 @@ const sharpenKernel = [
     [-0.00391, -0.01563, -0.02344, -0.01563, -0.00391] 
 ]; 
 
+var defaultResolution = 1081;
+var outputResolution = 4*1024 + 1;
+var outputTileResolution = 4*1024 + 1;
 var vmapSize = 18.144;
-var mapSize = 17.28;
+var defaultMapSize = 17.28;
+var mapSize = defaultMapSize;
 var tileSize = 1.92;
 
 var grid = loadSettings();
@@ -68,6 +72,8 @@ document.getElementById('geocoder').appendChild(geocoder.onAdd(map));
 map.on('load', function () {
     mapCanvas = map.getCanvasContainer();
 
+    scope.outputResolution = outputResolution;
+    scope.outputTileResolution = outputTileResolution;
     scope.mapSize = mapSize;
     scope.baseLevel = 0;
     scope.heightScale = 100;
@@ -87,9 +93,6 @@ map.on('style.load', function () {
 });
 
 map.on('click', function (e) {
-    grid.lng = e.lngLat.lng;
-    grid.lat = e.lngLat.lat;
-
     setGrid(grid.lng, grid.lat, vmapSize);
     map.panTo(new mapboxgl.LngLat(grid.lng, grid.lat));
     saveSettings();
@@ -407,6 +410,8 @@ function getGrid(lng, lat, size) {
 
 function loadSettings() {
     let stored = JSON.parse(localStorage.getItem('grid')) || {};
+
+    console.log("stored:", stored);
     
     // San Francisco
     stored.lng = parseFloat(stored.lng) || -122.43877;
@@ -539,9 +544,9 @@ function togglePanel(index) {
     }
 }
 
-function sanatizeMap(map, xOffset, yOffset) {
-    const citiesmapSize = 1081;
-    let sanatizedMap = Create2DArray(citiesmapSize, 0);
+function sanitizeMap(map, xOffset, yOffset) {
+    var citiesmapSize = scope.outputResolution;
+    let sanitizedMap = Create2DArray(citiesmapSize, 0);
 
     let lowestPositve = 100000;
 
@@ -552,25 +557,25 @@ function sanatizeMap(map, xOffset, yOffset) {
             if(h >= 0 && h < lowestPositve) {
                 lowestPositve = h;
             }                  
-            sanatizedMap[y - yOffset][x - xOffset] = h;
+            sanitizedMap[y - yOffset][x - xOffset] = h;
         }
     }
 
     // pass 2: fix negative heights artifact in mapbox maps
     for (let y = 0; y < citiesmapSize; y++) {
         for (let x = 0; x < citiesmapSize; x++) {
-            let h = sanatizedMap[y][x];
+            let h = sanitizedMap[y][x];
             if(h < 0) {
-                sanatizedMap[y][x] = lowestPositve;                
+                sanitizedMap[y][x] = lowestPositve;                
             }
         }
     }
 
-    return sanatizedMap;
+    return sanitizedMap;
 }
 
 function sanatizeWatermap(map, xOffset, yOffset) {
-    const citiesmapSize = 1081;
+    var citiesmapSize = scope.outputResolution;
     let watermap = Create2DArray(citiesmapSize, 0);
 
     for (let y = yOffset; y < yOffset + citiesmapSize; y++) {
@@ -665,6 +670,7 @@ function incPb(el, value = 1) {
 }
 
 function getHeightmap(mode = 0, callback) {
+    console.log("Creating heightmap:", scope.outputResolution);
     pbElement.value = 0;
     pbElement.style.visibility = 'visible';
 
@@ -673,10 +679,14 @@ function getHeightmap(mode = 0, callback) {
     // get the extent of the current map
     // in heightmap, each pixel is treated as vertex data, and 1081px represents 1080 faces
     // therefore, "1px = 16m" when the map size is 17.28km
-    let extent = getExtent(grid.lng, grid.lat, mapSize / 1080 * 1081);
+    let extent = getExtent(grid.lng, grid.lat, mapSize / (scope.outputResolution - 1) * scope.outputResolution);
 
-    // zoom is 13 in principle
+    // zoom is 13 when mapSize is 17.28 km
+    // zoom needs to double when mapSize halves
     let zoom = 13;
+    let logDistanceMapSize = Math.log2(defaultMapSize) - Math.log2(mapSize);
+    let logDistanceResolution = Math.log2(scope.outputResolution) - Math.log2(defaultResolution);
+    zoom = Math.round(zoom + logDistanceMapSize + logDistanceResolution);
 
     incPb(pbElement);
     // get a tile that covers the top left and bottom right (for the tile count calculation)
@@ -710,6 +720,9 @@ function getHeightmap(mode = 0, callback) {
         zoom = z;
         tileCnt = tc;
     }
+
+    console.log("zoom level:", zoom);
+    console.log("tile count:", tileCnt);
 
     let tileLng = tile2long(x, zoom);
     let tileLat = tile2lat(y, zoom);
@@ -770,13 +783,16 @@ function getHeightmap(mode = 0, callback) {
             let citiesmap, png, canvas, url;
 
             // heightmap size corresponds to 1081px map size
+            console.log("creating heightmap...");
             let heightmap = toHeightmap(tiles, distance);
+            console.log("creating heightmap done");
 
             // heightmap edge to map edge distance
             let xOffset = Math.round(leftDistance / distance * heightmap.length);
             let yOffset = Math.round(topDistance / distance * heightmap.length);
 
-            let sanatizedMap = sanatizeMap(heightmap, xOffset, yOffset);
+            console.log("sanitizing heightmap");
+            let sanatizedMap = sanitizeMap(heightmap, xOffset, yOffset);
 
             let heights = calcMinMaxHeight(sanatizedMap); 
             grid.minHeight = heights.min;
@@ -786,6 +802,7 @@ function getHeightmap(mode = 0, callback) {
             // callback after height calculation is completed
             if (typeof callback === 'function') callback();
 
+            console.log("sanitizing watermap");
             let watermap = sanatizeWatermap(toWatermap(vTiles, heightmap.length), xOffset, yOffset);
 
             switch (mode) {
@@ -793,13 +810,13 @@ function getHeightmap(mode = 0, callback) {
                     // never draw a grid on a raw heightmap
                     let savedDrawGrid = document.getElementById('drawGrid').checked;
                     document.getElementById('drawGrid').checked = false;
-                    citiesmap = toCitiesmap(sanatizedMap, watermap);
-                    download('heightmap.raw', citiesmap);
+                    citiesmap = splitRawToTileZip(toCitiesmap(sanatizedMap, watermap), scope.outputResolution, scope.outputTileResolution);
+                    download('heightmap.zip', citiesmap);
                     document.getElementById('drawGrid').checked = savedDrawGrid;
                     break;
                 case 1:
                     citiesmap = toCitiesmap(sanatizedMap, watermap);
-                    png = UPNG.encodeLL([citiesmap], 1081, 1081, 1, 0, 16);
+                    png = UPNG.encodeLL([citiesmap], scope.outputResolution, scope.outputResolution, 1, 0, 16);
                     download('heightmap.png', png);
                     break;
                 case 2:
@@ -807,7 +824,7 @@ function getHeightmap(mode = 0, callback) {
                     break;
                 case 3:
                     citiesmap = toCitiesmap(sanatizedMap, watermap);
-                    png = UPNG.encodeLL([citiesmap], 1081, 1081, 1, 0, 16);
+                    png = UPNG.encodeLL([citiesmap], scope.outputResolution, scope.outputResolution, 1, 0, 16);
                     downloadAsZip(png, 1);
                     break;
                 case 255:
@@ -894,7 +911,6 @@ async function getMapImage() {
 }
 
 function autoSettings(withMap = true) {
-    scope.mapSize = 17.28;
     scope.waterDepth = defaultWaterdepth;
 
     mapSize = scope.mapSize / 1;
@@ -913,9 +929,6 @@ function autoSettings(withMap = true) {
     setGrid(grid.lng, grid.lat, vmapSize);
 
     document.getElementById('drawStrm').checked = true;
-
-    document.getElementById('drawMarker').checked = true;
-    document.getElementById('drawGrid').checked = true;
 
     document.getElementById('plainsHeight').value = 140;
     document.getElementById('blurPasses').value = 10;
@@ -952,6 +965,7 @@ function toWatermap(vTiles, length) {
     ctx.fillStyle = '#000000';
     ctx.beginPath();
 
+    console.log("TWM drawing water");
     for (let ty = 0; ty < tileCnt; ty++) {
         for (let tx = 0; tx < tileCnt; tx++) {
             if (typeof vTiles[ty][tx] !== "boolean") {
@@ -972,6 +986,7 @@ function toWatermap(vTiles, length) {
     ctx.fill();
 
     if (document.getElementById('drawStrm').checked) {
+        console.log("TWM drawing streams");
         // waterway
         ctx.strokeStyle = '#000000';
         ctx.lineWidth = 1;
@@ -995,6 +1010,8 @@ function toWatermap(vTiles, length) {
         }
         ctx.stroke();
     }
+
+    console.log("TWM output water");
 
     let watermap = Create2DArray(length, 1);
     let img = ctx.getImageData(0, 0, length, length);
@@ -1261,10 +1278,15 @@ function toHeightmap(tiles, distance) {
 
     // in heightmap, each pixel is treated as vertex data, and 1081px represents 1080 faces
     // therefore, "1px = 16m" when the map size is 17.28km
-    let heightmap = Create2DArray(Math.ceil(1080 * (distance / mapSize)), 0);
+    let heightmap = Create2DArray(Math.ceil((scope.outputResolution - 1) * (distance / mapSize)), 0);
     let smSize = srcMap.length;
     let hmSize = heightmap.length;
     let r = (hmSize - 1) / (smSize - 1);
+
+    console.log("THM output:", scope.outputResolution);
+    console.log("THM distance:", distance);
+    console.log("THM map size:", mapSize);
+    console.log("THM hmSize:", hmSize);
 
     for (let i = 0; i < tileNum; i++) {
         for (let j = 0; j < tileNum; j++) {
@@ -1273,7 +1295,7 @@ function toHeightmap(tiles, distance) {
                 for (let x = 0; x < 512; x++) {
                     let tileIndex = y * 512 * 4 + x * 4;
                     // resolution 0.1 meters
-                    srcMap[i * 512 + y][j * 512 + x] = -100000 + ((tile[tileIndex] * 256 * 256 + tile[tileIndex + 1] * 256 + tile[tileIndex + 2]));
+                    srcMap[i * 512 + y][j * 512 + x] = -100000 + (tile[tileIndex] * 256 * 256 + tile[tileIndex + 1] * 256 + tile[tileIndex + 2]);
                 }
             }
         }
@@ -1294,8 +1316,8 @@ function toHeightmap(tiles, distance) {
             heightmap[i][j] = Math.round((1 - dx) * (1 - dy) * srcMap[y0][x0] + dx * (1 - dy) * srcMap[y0][x1] + (1 - dx) * dy * srcMap[y1][x0] + dx * dy * srcMap[y1][x1]);
         }
     }
-    for (let i = 0; i < hmSize; i++) { heightmap[i][hmSize - 1] = srcMap[i][hmSize - 1] }
-    for (let j = 0; j < hmSize; j++) { heightmap[hmSize - 1][j] = srcMap[hmSize - 1][j] }
+    //for (let i = 0; i < hmSize; i++) { heightmap[i][hmSize - 1] = srcMap[i][hmSize - 1] }
+    //for (let j = 0; j < hmSize; j++) { heightmap[hmSize - 1][j] = srcMap[hmSize - 1][j] }
 
     return heightmap;
 }
@@ -1331,7 +1353,7 @@ function toTerrainRGB(heightmap) {
 }
 
 function toCitiesmap(heightmap, watermap) {
-    const citiesmapSize = 1081;
+    var citiesmapSize = scope.outputResolution;
 
     // cities has L/H byte order
     let citiesmap = new Uint8ClampedArray(2 * citiesmapSize * citiesmapSize);
@@ -1476,6 +1498,63 @@ function download(filename, data, url = false) {
 
     // Remove anchor from body
     document.body.removeChild(a)
+}
+
+function indexTile(x, y, tileSize) {
+    return (y * tileSize) + x;
+}
+
+function indexRawByTile(x, y, tileX, tileY, mapSize, tileSize) {
+    var index = indexTile(x, y, mapSize);
+    index += (tileY * mapSize * tileSize) + (tileX * tileSize);
+    return index;
+}
+
+function splitRawToTileZip(data, mapSize, tileSize) {
+    var tileCount = Math.round(mapSize / tileSize) >>> 0;
+
+    if (tileCount == 1) {
+        return data;
+    }
+
+    console.log("Splitting map into tiles");
+    console.log(`Map size: ${mapSize}    Tile size: ${tileSize}    Tile count: ${tileCount}x${tileCount}`);
+
+    var result = {};
+
+    var tileChecksum = 0 >>> 0;
+    var dataChecksum = 0 >>> 0;
+
+    for (var tileX = 0; tileX < tileCount; tileX++) {
+        for (var tileY = 0; tileY < tileCount; tileY++) {
+            var tile = new Uint8ClampedArray(2 * tileSize * tileSize);
+
+            for (var y = 0; y < tileSize; y++) {
+                for (var x = 0; x < tileSize; x++) {
+                    var iRaw = 2 * indexRawByTile(x, y, tileX, tileY, mapSize, tileSize - 1);
+                    var iTile = 2 * indexTile(x, y, tileSize);
+
+                    tile[iTile + 0] = data[iRaw + 0];
+                    tile[iTile + 1] = data[iRaw + 1];
+
+                    tileChecksum = (tileChecksum + 1) >>> 0;
+                    tileChecksum = (tileChecksum + tile[iTile + 0]) >>> 0;
+                    tileChecksum = (tileChecksum + tile[iTile + 1]) >>> 0;
+
+                    dataChecksum = (dataChecksum + 1) >>> 0;
+                    dataChecksum = (dataChecksum + data[iRaw + 0]) >>> 0;
+                    dataChecksum = (dataChecksum + data[iRaw + 1]) >>> 0;
+                }
+            }
+
+            result["tile" + tileX + "x" + tileY + ".raw"] = tile;
+        }
+    }
+
+    console.log("Checksum: ", dataChecksum, tileChecksum);
+    console.log("Zipping data");
+
+    return UZIP.encode(result);
 }
 
 async function downloadPngToTile(url, withoutQueryUrl = url) {

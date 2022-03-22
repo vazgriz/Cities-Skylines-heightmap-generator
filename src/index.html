@@ -81,6 +81,14 @@
                 <div class="settings">
                     <header><h4>Size and scale</h4><hr></header>
                     <dl>
+                        <dt>Output Size:</dt>
+                            <dd><input type="range" data-model="outputResolution" min="1024" max="65536" step="1" id="outputResolution"></dd>
+                            <dd><input type="number" data-model="outputResolution" min="1024" max="65536" step="1" id="outputResolution"></dd>
+                            <dd><abbr>px</abbr></dd>
+                        <dt>Output Tile Size:</dt>
+                            <dd><input type="range" data-model="outputTileResolution" min="1025" max="4097" step="1024" id="outputTileResolution"></dd>
+                            <dd><input type="number" data-model="outputTileResolution" min="1025" max="4097" step="1024" id="outputTileResolution"></dd>
+                            <dd><abbr>px</abbr></dd>
                         <dt>Map size:</dt>
                             <dd><input type="range" data-model="mapSize" min="17.28" max="69.12" step="0.01" id="mapSize"
                                 onkeyup="changeMapsize(this)" onmouseup="changeMapsize(this)"></dd>
@@ -219,6 +227,7 @@
     <script src="jszip.js"></script>
     <script src="pako.min.js"></script>
     <script src="upng.js"></script>
+    <script src="uzip.js"></script>
     <script src='tiles.js'></script>
     <script src="binding.js"></script> <!-- needs to be loaded before app, for scope var-->
     <script src="app.js"></script>
