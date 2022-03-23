@@ -20,8 +20,8 @@ const sharpenKernel = [
 ]; 
 
 var defaultResolution = 1081;
-var outputResolution = 4*1024 + 1;
-var outputTileResolution = 4*1024 + 1;
+var outputResolution = 2*1024 + 1;
+var outputTileResolution = 2*1024 + 1;
 var vmapSize = 18.144;
 var defaultMapSize = 17.28;
 var mapSize = defaultMapSize;
@@ -811,7 +811,11 @@ function getHeightmap(mode = 0, callback) {
                     let savedDrawGrid = document.getElementById('drawGrid').checked;
                     document.getElementById('drawGrid').checked = false;
                     citiesmap = splitRawToTileZip(toCitiesmap(sanatizedMap, watermap), scope.outputResolution, scope.outputTileResolution);
-                    download('heightmap.zip', citiesmap);
+                    if (citiesmap.tileCount == 1) {
+                        download('heightmap.raw', citiesmap.data);
+                    } else {
+                        download('heightmap.zip', citiesmap.data);
+                    }
                     document.getElementById('drawGrid').checked = savedDrawGrid;
                     break;
                 case 1:
@@ -1022,6 +1026,8 @@ function toWatermap(vTiles, length) {
             watermap[i][j] = img.data[index] / 255;     // 0 => 255 : 0 => 1    0 = water, 1 = land
         }
     }
+
+    //download("watermap.png", UPNG.encode([img.data], length, length, 0));
 
     return watermap;
 }
@@ -1352,6 +1358,47 @@ function toTerrainRGB(heightmap) {
     return canvas;
 }
 
+function clamp(value, min, max) {
+    return Math.min(max, Math.max(min, value));
+}
+
+function inverseLerp(value, min, max) {
+    return clamp((value - min) / (max - min), 0, 1);
+}
+
+function lerp(t, min, max) {
+    return min * (1 - t) + max * t;
+}
+
+function normalizeHeightMap(heightmap, mapSize) {
+    let min = 1000000000;
+    let max = -1000000000;
+
+    for (let y = 0; y < mapSize; y++) {
+        for (let x = 0; x < mapSize; x++) {
+            let sample = heightmap[y][x];
+
+            if (sample > max) {
+                max = sample;
+            }
+
+            if (sample < min) {
+                min = sample;
+            }
+        }
+    }
+
+    for (let y = 0; y < mapSize; y++) {
+        for (let x = 0; x < mapSize; x++) {
+            let sample = heightmap[y][x];
+            let t = inverseLerp(sample, min, max);
+            let newValue = lerp(t, 0, 1);
+
+            heightmap[y][x] = newValue;
+        }
+    }
+}
+
 function toCitiesmap(heightmap, watermap) {
     var citiesmapSize = scope.outputResolution;
 
@@ -1379,6 +1426,8 @@ function toCitiesmap(heightmap, watermap) {
         }
     }
 
+    normalizeHeightMap(workingmap, citiesmapSize);
+
     // level correction, for specific needs
     // to smooth plains and dramatize mountains or level a mountanus coastline
     workingmap = levelMap(workingmap, grid.minHeight + waterDepth, grid.maxHeight, scope.levelCorrection);
@@ -1400,8 +1449,10 @@ function toCitiesmap(heightmap, watermap) {
     // so redraw them, with little extra depth
     let streamDepth = parseInt(document.getElementById('streamDepth').value);
     let highestWaterHeight = 0;
-    if(document.getElementById('drawStrm').checked) {
-            for (let y = 0; y < citiesmapSize; y++) {
+    let drawStream = document.getElementById('drawStrm').checked;
+
+    if(drawStream) {
+        for (let y = 0; y < citiesmapSize; y++) {
             for (let x = 0; x < citiesmapSize; x++) {
                 let height = workingmap[y][x];
                 if(height > highestWaterHeight) {
@@ -1425,7 +1476,7 @@ function toCitiesmap(heightmap, watermap) {
     // the streams are drawn over the entire map, so post process the entire map
     for(let l=0; l<postPasses; l++) {
         workingmap = filterMap(workingmap, 0, highestWaterHeight, meanKernel);
-    }     
+    }
 
     // debug
     //exportToCSV(workingmap);
@@ -1435,7 +1486,8 @@ function toCitiesmap(heightmap, watermap) {
     for (let y = 0; y < citiesmapSize; y++) {
         for (let x = 0; x < citiesmapSize; x++) {
             // get the value in 1/10meyers and scale and convert to cities skylines 16 bit int
-            let h = Math.round(workingmap[y][x] / 100 * parseFloat(scope.heightScale) / 0.015625);
+            //let h = Math.round(workingmap[y][x] * 64 * parseFloat(scope.heightScale) / 100);
+            let h = workingmap[y][x] * 65535;
 
             if (h > 65535) h = 65535;
 
@@ -1514,7 +1566,7 @@ function splitRawToTileZip(data, mapSize, tileSize) {
     var tileCount = Math.round(mapSize / tileSize) >>> 0;
 
     if (tileCount == 1) {
-        return data;
+        return { ["data"]: data, ["tileCount"]: tileCount };
     }
 
     console.log("Splitting map into tiles");
@@ -1554,7 +1606,7 @@ function splitRawToTileZip(data, mapSize, tileSize) {
     console.log("Checksum: ", dataChecksum, tileChecksum);
     console.log("Zipping data");
 
-    return UZIP.encode(result);
+    return { ["data"]: UZIP.encode(result), ["tileCount"]: tileCount };
 }
 
 async function downloadPngToTile(url, withoutQueryUrl = url) {
