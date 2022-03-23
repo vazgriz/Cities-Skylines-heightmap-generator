@@ -20,8 +20,9 @@ const sharpenKernel = [
 ]; 
 
 var defaultResolution = 1081;
-var outputResolution = 2*1024 + 1;
-var outputTileResolution = 2*1024 + 1;
+var defaultOutputResolution
+var outputResolution = defaultResolution;
+var outputTileResolution = defaultResolution;
 var vmapSize = 18.144;
 var defaultMapSize = 17.28;
 var mapSize = defaultMapSize;
@@ -90,6 +91,8 @@ map.on('style.load', function () {
 
     showWaterLayer();
     showHeightLayer();
+
+    updateMapSize(mapSize);
 });
 
 map.on('click', function (e) {
@@ -409,7 +412,7 @@ function getGrid(lng, lat, size) {
 }
 
 function loadSettings() {
-    let stored = JSON.parse(localStorage.getItem('grid')) || {};
+    let stored = JSON.parse(localStorage.getItem('settings')) || {};
 
     console.log("stored:", stored);
     
@@ -438,28 +441,36 @@ function loadSettings() {
     document.getElementById('plainsHeight').value = parseInt(stored.plainsHeight) || 140;
     document.getElementById('streamDepth').value = parseInt(stored.streamDepth) || 140;
 
+    mapSize = parseFloat(stored.mapSize) || defaultMapSize;
+    scope.outputResolution = parseInt(stored.outputResolution) || defaultResolution;
+    scope.outputTileResolution = parseInt(stored.outputTileResolution) || defaultResolution;
+
     return stored;
 }
 
 function saveSettings() {
-    grid.zoom = map.getZoom();
+    let stored = Object.assign({}, grid);
+    stored.zoom = map.getZoom();
 
-    grid.drawGrid = document.getElementById('drawGrid').checked;
-    grid.waterDepth = parseInt(document.getElementById('waterDepth').value);
-    grid.drawStreams = document.getElementById('drawStrm').checked;
-    grid.drawMarker = document.getElementById('drawMarker').checked;
+    stored.drawGrid = document.getElementById('drawGrid').checked;
+    stored.waterDepth = parseInt(document.getElementById('waterDepth').value);
+    stored.drawStreams = document.getElementById('drawStrm').checked;
+    stored.drawMarker = document.getElementById('drawMarker').checked;
     
-    grid.plainsHeight = parseInt(document.getElementById('plainsHeight').value);
-    grid.blurPasses = parseInt(document.getElementById('blurPasses').value);
-    grid.blurPostPasses = parseInt(document.getElementById('blurPostPasses').value);
-    grid.streamDepth = parseInt(document.getElementById('streamDepth').value);
+    stored.plainsHeight = parseInt(document.getElementById('plainsHeight').value);
+    stored.blurPasses = parseInt(document.getElementById('blurPasses').value);
+    stored.blurPostPasses = parseInt(document.getElementById('blurPostPasses').value);
+    stored.streamDepth = parseInt(document.getElementById('streamDepth').value);
 
-    grid.gravityCenter = scope.gravityCenter;
-    grid.tiltHeight = parseInt(document.getElementById('tiltHeight').value);
+    stored.gravityCenter = scope.gravityCenter;
+    stored.tiltHeight = parseInt(document.getElementById('tiltHeight').value);
 
-    grid.levelCorrection = scope.levelCorrection;
+    stored.levelCorrection = scope.levelCorrection;
+    stored.mapSize = mapSize;
+    stored.outputResolution = scope.outputResolution;
+    stored.outputTileResolution = scope.outputTileResolution;
 
-    localStorage.setItem('grid', JSON.stringify(grid));
+    localStorage.setItem('settings', JSON.stringify(stored));
 }
 
 function Create2DArray(rows, def = null) {
@@ -551,13 +562,13 @@ function sanitizeMap(map, xOffset, yOffset) {
     let lowestPositve = 100000;
 
     // pass 1: normalize the map, and determine the lowestPositve
-    for (let y = yOffset; y < yOffset + citiesmapSize; y++) {
-        for (let x = xOffset; x < xOffset + citiesmapSize; x++) {
-            let h = map[y][x]; 
+    for (let y = 0; y < citiesmapSize; y++) {
+        for (let x = 0; x < citiesmapSize; x++) {
+            let h = map[y + yOffset][x + xOffset]; 
             if(h >= 0 && h < lowestPositve) {
                 lowestPositve = h;
-            }                  
-            sanitizedMap[y - yOffset][x - xOffset] = h;
+            }
+            sanitizedMap[y][x] = h;
         }
     }
 
@@ -578,10 +589,10 @@ function sanatizeWatermap(map, xOffset, yOffset) {
     var citiesmapSize = scope.outputResolution;
     let watermap = Create2DArray(citiesmapSize, 0);
 
-    for (let y = yOffset; y < yOffset + citiesmapSize; y++) {
-        for (let x = xOffset; x < yOffset + citiesmapSize; x++) {
-            let h = map[y][x];
-            watermap[y - yOffset][x - xOffset] = h;
+    for (let y = 0; y < citiesmapSize; y++) {
+        for (let x = 0; x < citiesmapSize; x++) {
+            let h = map[y + yOffset][x + xOffset];
+            watermap[y][x] = h;
         }
     }
 
@@ -627,7 +638,11 @@ function zoomOut() {
 }
 
 function changeMapsize(el) {
-    mapSize = el.value / 1;
+    updateMapSize(el.value / 1);
+}
+
+function updateMapSize(value) {
+    mapSize = value;
     vmapSize = mapSize * 1.05;
     tileSize = mapSize / 9;
     setGrid(grid.lng, grid.lat, vmapSize);
